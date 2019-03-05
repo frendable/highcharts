@@ -17,32 +17,57 @@ import '../modules/networkgraph/networkgraph.src.js';
 
 var seriesType = H.seriesType,
     defined = H.defined,
-    pick = H.pick;
+    pick = H.pick,
+    addEvent = H.addEvent,
+    Chart = H.Chart;
 
 
 H.networkgraphIntegrations.packedbubble = {
+
     repulsiveForceFunction: function (d, k, node) {
-        // todo: repNode
-        // Used in API:
         // node.radius + repNode.radius?
         return Math.min(d, node.marker.radius + 5);
-        // Force only for close nodes
     },
     barycenter: function () {
         var gravitationalConstant = this.options.gravitationalConstant,
-            /* Add in next implementation
-             *   xFactor = this.barycenter.xFactor,
-             *   yFactor = this.barycenter.yFactor,
-             */
+            // Add in next implementation
+            // xFactor = this.barycenter.xFactor,
+            // yFactor = this.barycenter.yFactor,
             box = this.box,
-            nodes = this.nodes;
+            nodes = this.nodes,
+            chart = this.nodes[0].series.chart,
+            seriesPoint;
 
+        nodes.forEach(function (node) {
+            seriesPoint = {
+                plotX: box.width / 2,
+                plotY: box.height / 2
+            };
 
-        this.nodes.forEach(function (node) {
+            if (!node.ghostPoint) {
+                seriesPoint = node.series.seriesPoint;
+            } else {
+                if (!node.series.seriesPoint.gr) {
+                    node.series.seriesPoint.gr = chart.renderer.circle(
+                        node.series.seriesPoint.plotX + chart.plotLeft,
+                        node.series.seriesPoint.plotY + chart.plotTop,
+                        node.series.seriesPoint.mass
+                    ).attr({
+                        fill: 'rgba(250,250,250,0.5)',
+                        stroke: 'blue',
+                        'stroke-width': 1
+                    }).add();
+                } else {
+                    node.series.seriesPoint.gr.attr({
+                        x: node.series.seriesPoint.plotX + chart.plotLeft,
+                        y: node.series.seriesPoint.plotY + chart.plotTop
+                    });
+                }
+            }
             if (!node.fixedPosition) {
-                node.plotX -= (node.plotX - box.width / 2) *
+                node.plotX -= (node.plotX - seriesPoint.plotX) *
                 gravitationalConstant / (node.mass * Math.sqrt(nodes.length));
-                node.plotY -= (node.plotY - box.height / 2) *
+                node.plotY -= (node.plotY - seriesPoint.plotY) *
                 gravitationalConstant / (node.mass * Math.sqrt(nodes.length));
             }
         });
@@ -52,41 +77,21 @@ H.networkgraphIntegrations.packedbubble = {
         if (!node.fixedPosition) {
             node.plotX += distanceXY.x * factor;
             node.plotY += distanceXY.y * factor;
+            node.repulsiveChangeX += distanceXY.x * factor;
+            node.repulsiveChangeY += distanceXY.x * factor;
         }
         if (!repNode.fixedPosition) {
             repNode.plotX -= distanceXY.x * factor;
             repNode.plotY -= distanceXY.y * factor;
+            repNode.repulsiveChangeX -= distanceXY.x * factor;
+            repNode.repulsiveChangeY -= distanceXY.x * factor;
         }
     },
     integrate: function (layout, node) {
-        /*
-        Verlet without velocity:
-
-            x(n+1) = 2 * x(n) - x(n-1) + A(T) * deltaT ^ 2
-
-        where:
-            - x(n+1) - new position
-            - x(n) - current position
-            - x(n-1) - previous position
-
-        Assuming A(t) = 0 (no acceleration) and (deltaT = 1) we
-        get:
-
-            x(n+1) = x(n) + (x(n) - x(n-1))
-
-        where:
-            - (x(n) - x(n-1)) - position change
-
-        TO DO:
-        Consider Verlet with velocity to support additional
-        forces. Or even Time-Corrected Verlet by Jonathan
-        "lonesock" Dummer
-        */
         var prevX = node.prevX,
             prevY = node.prevY,
             diffX = (node.plotX + node.dispX - prevX),
             diffY = (node.plotY + node.dispY - prevY);
-
         // Store for the next iteration:
         node.prevX = node.plotX + node.dispX;
         node.prevY = node.plotY + node.dispY;
@@ -112,56 +117,116 @@ H.networkgraphIntegrations.packedbubble = {
 H.extend(
     H.layouts['reingold-fruchterman'].prototype,
     {
+        getBarycenter: function () {
+            var systemMass = 0,
+                cx = 0,
+                cy = 0,
+                nodes = this.nodes;
 
+            nodes.forEach(function (node) {
+                cx += node.plotX * node.mass;
+                cy += node.plotY * node.mass;
+
+                systemMass += node.mass;
+            });
+
+            this.barycenter = {
+                x: cx,
+                y: cy,
+                xFactor: cx / systemMass,
+                yFactor: cy / systemMass
+            };
+            /*
+            if (!this.options.mixSeries) {
+                this.series.forEach(function (s) {
+                    s.systemMass = 0;
+                    s.cx = 0;
+                    s.cy = 0;
+                    nodes.forEach(function(node) {
+                        if(node.series.index === s.index) {
+                            s.cx += node.plotX * node.mass;
+                            s.cy += node.plotY * node.mass;
+                            s.systemMass += node.mass;
+                        }
+                    });
+
+                    s.seriesBaryCent = {
+                        x: s.cx,
+                        y: s.cy,
+                        xFactor: s.cx / s.systemMass,
+                        yFactor: s.cy / s.systemMass
+                    };
+                });
+            }
+            */
+            return this.barycenter;
+        },
+
+        clearNodes: function () {
+            this.nodes.length = 0;
+        },
+        addNodes: function (nodes) {
+            nodes.forEach(function (node) {
+                if (this.nodes.indexOf(node) === -1) {
+                    this.nodes.push(node);
+                }
+            }, this);
+        },
         setCircularPositions: function () {
-            var box = this.box,
-                nodes = this.nodes,
+            var layout = this,
+                box = layout.box,
+                nodes = layout.nodes,
                 nodesLength = nodes.length + 1,
-                angle = 2 * Math.PI / nodesLength;
+                angle = 2 * Math.PI / nodesLength,
+                seriesPoint;
 
-
-            // Initial positions are laid out along a small circle, appearing
-            // as a cluster in the middle
             nodes.forEach(function (node, index) {
-                node.plotX = node.prevX = pick(
-                    node.plotX,
-                    box.width / 2 + 80 * Math.cos(index * angle)
-                );
-                node.plotY = node.prevY = pick(
-                    node.plotY,
-                    box.height / 2 + 80 * Math.sin(index * angle)
-                );
+                seriesPoint = {
+                    plotX: box.width / 2,
+                    plotY: box.height / 2
+                };
+                if (
+                    !node.ghostPoint &&
+                    node.series &&
+                    node.series.seriesPoint &&
+                    node.series.seriesPoint.plotX
+                ) {
+                    seriesPoint = node.series.seriesPoint;
+                }
+                node.plotX = node.prevX = node.ghostPoint ?
+                    seriesPoint.plotX +
+                    50 * Math.cos(node.index || index * angle) :
+                    pick(
+                        node.plotX,
+                        seriesPoint.plotX +
+                        50 * Math.cos(node.index || index * angle)
+                    );
+
+                node.plotY = node.prevY = node.ghostPoint ?
+                    seriesPoint.plotY +
+                    50 * Math.cos(node.index || index * angle) :
+                    pick(
+                        node.plotY,
+                        seriesPoint.plotY +
+                        50 * Math.sin(node.index || index * angle)
+                    );
 
                 node.dispX = 0;
                 node.dispY = 0;
             });
         },
-        getNeighbours: function () {
-            var layout = this;
-            layout.nodes.forEach(function (node) {
-                node.neighbours = 1;
-                layout.nodes.forEach(function (repNode) {
-                    var distanceXY = layout.getDistXY(node, repNode);
-                    var distanceR = layout.vectorLength(distanceXY);
-                    if (
-                        distanceR - (
-                            repNode.marker.radius + node.marker.radius
-                        ) < 1
-                    ) {
-                        node.neighbours += 0.01;
-                    }
-                });
-            });
-        },
         repulsiveForces: function () {
-            var layout = this;
+            var layout = this,
+                force,
+                distanceR,
+                distanceXY;
             layout.nodes.forEach(function (node) {
+                node.repulsiveChangeX = 0;
+                node.repulsiveChangeY = 0;
                 node.degree = node.mass;
+                node.neighbours = 0;
                 layout.nodes.forEach(function (repNode) {
-                    var force = 0,
-                        distanceR,
-                        distanceXY;
-
+                    force = 0;
                     if (
                         // Node can not repulse itself:
                         node !== repNode &&
@@ -173,26 +238,15 @@ H.extend(
                         distanceXY = layout.getDistXY(node, repNode);
                         distanceR = (layout.vectorLength(distanceXY) -
                             (node.marker.radius + repNode.marker.radius + 5));
-
                         if (distanceR < 0) {
                             node.degree += 0.01;
-
-                            // improvement needed v7.1.
-                            if (layout.vectorLength(distanceXY) < 5) {
-                                force = layout.repulsiveForce(
-                                    -distanceR,
-                                    layout.k,
-                                    node,
-                                    repNode
-                                );
-                            } else {
-                                force = layout.repulsiveForce(
-                                    -distanceR,
-                                    layout.k,
-                                    node,
-                                    repNode
-                                );
-                            }
+                            node.neighbours++;
+                            force = layout.repulsiveForce(
+                                -distanceR / Math.sqrt(node.neighbours),
+                                layout.k,
+                                node,
+                                repNode
+                            );
                         }
 
                         layout.force(
@@ -206,6 +260,57 @@ H.extend(
                     }
                 });
             });
+        },
+        applyLimitBox: function (node, box) {
+            /*
+            TO DO: Consider elastic collision instead of stopping.
+            o' means end position when hitting plotting area edge:
+
+            - "inelastic":
+            o
+             \
+            ______
+            |  o'
+            |   \
+            |    \
+
+            - "elastic"/"bounced":
+            o
+             \
+            ______
+            |  ^
+            | / \
+            |o'  \
+
+            Euler sample:
+            if (plotX < 0) {
+                plotX = 0;
+                dispX *= -1;
+            }
+
+            if (plotX > box.width) {
+                plotX = box.width;
+                dispX *= -1;
+            }
+
+            */
+            // Limit X-coordinates:
+            node.plotX = Math.max(
+                Math.min(
+                    node.plotX,
+                    box.width - node.marker.radius
+                ),
+                box.left + node.marker.radius
+            );
+
+            // Limit Y-coordinates:
+            node.plotY = Math.max(
+                Math.min(
+                    node.plotY,
+                    box.height - node.marker.radius
+                ),
+                box.top + node.marker.radius
+            );
         }
     }
 );
@@ -260,6 +365,8 @@ seriesType('packedbubble', 'bubble',
         tooltip: {
             pointFormat: 'Value: {point.value}'
         },
+        draggable: true,
+        isPackedBbl: true,
         layoutAlgorithm: {
             /**
              * Repulsive force applied on a node. Passed are two arguments:
@@ -401,6 +508,7 @@ seriesType('packedbubble', 'bubble',
              * finding perfect graph positions can require more time.
              */
             maxIterations: 1000,
+            mixSeries: true,
             /**
              * Gravitational const used in the barycenter
              * force of the algorithm.
@@ -460,7 +568,6 @@ seriesType('packedbubble', 'bubble',
 
             return allDataPoints;
         },
-        /* TODO
         init: function () {
 
             H.Series.prototype.init.apply(this, arguments);
@@ -477,28 +584,33 @@ seriesType('packedbubble', 'bubble',
 
             return this;
         },
-        */
-
         deferLayout: function () {
-            var layoutOptions = this.options.layoutAlgorithm,
-                points = this.points,
-                graphLayoutsStorage = this.chart.graphLayoutsStorage,
-                chartOptions = this.chart.options.chart,
-                layout;
+            var series = this,
+                layoutOptions = series.options.layoutAlgorithm,
+                points = series.points,
+                graphLayoutsStorage = series.chart.graphLayoutsStorage,
+                graphLayoutsLookup = series.chart.graphLayoutsLookup,
+                chartOptions = series.chart.options.chart,
+                layout,
+                nodeAdded,
+                seriesLayout,
+                NetworkPoint = H.seriesTypes.networkgraph.prototype.pointClass;
 
-            this.nodes = points;
-            this.nodes.forEach(function (node) {
+
+            series.nodes = points;
+            series.nodes.forEach(function (node) {
                 node.mass = Math.max(node.marker.radius / 10, 1);
                 node.degree = 1;
                 node.collisionNmb = 1;
             });
 
-            if (!this.visible) {
+            if (!series.visible) {
                 return;
             }
 
             if (!graphLayoutsStorage) {
-                this.chart.graphLayoutsStorage = graphLayoutsStorage = {};
+                series.chart.graphLayoutsStorage = graphLayoutsStorage = {};
+                series.chart.graphLayoutsLookup = graphLayoutsLookup = [];
             }
 
             layout = graphLayoutsStorage[layoutOptions.type];
@@ -511,15 +623,80 @@ seriesType('packedbubble', 'bubble',
 
                 graphLayoutsStorage[layoutOptions.type] = layout =
                     new H.layouts[layoutOptions.type](layoutOptions);
+                graphLayoutsLookup.splice(layout.index, 0, layout);
+
             }
 
-            this.layout = layout;
+            series.layout = layout;
 
-            layout.setArea(0, 0, this.chart.plotWidth, this.chart.plotHeight);
-            layout.addSeries(this);
-            layout.addNodes(this.nodes);
+            layout.setArea(
+                0, 0, series.chart.plotWidth, series.chart.plotHeight
+            );
+            layout.addSeries(series);
+            layout.addNodes(series.nodes);
             layout.addLinks([]);
-            this.points = points;
+            series.points = points;
+
+            if (!series.options.mixSeries) {
+                seriesLayout = graphLayoutsStorage[
+                    layoutOptions.type + '-series'
+                ];
+                if (!seriesLayout) {
+                    graphLayoutsStorage[layoutOptions.type + '-series'] =
+                        seriesLayout =
+                            new H.layouts[layoutOptions.type](
+                                H.merge(
+                                    layoutOptions,
+                                    {
+                                        enableSimulation: false,
+                                        maxIterations: 1400
+                                    }
+                                )
+                            );
+                    graphLayoutsLookup.splice(
+                        seriesLayout.index, 0, seriesLayout
+                    );
+                }
+
+                series.seriesLayout = seriesLayout;
+
+                series.systemMass = 0;
+
+                series.points.forEach(function (p) {
+                    series.systemMass += p.mass;
+                });
+                series.seriesRadius = 10 * Math.sqrt(series.systemMass * 3) + 5;
+
+                seriesLayout.nodes.forEach(function (node) {
+                    if (node.seriesIndex === series.index) {
+                        nodeAdded = true;
+                    }
+                });
+                seriesLayout.setArea(
+                    0, 0, series.chart.plotWidth, series.chart.plotHeight
+                );
+                if (!nodeAdded) {
+                    var seriesPoint = (
+                        new NetworkPoint()
+                    ).init(
+                        this,
+                        {
+                            mass: series.seriesRadius,
+                            marker: {
+                                radius: series.seriesRadius
+                            },
+                            degree: series.seriesRadius,
+                            ghostPoint: true,
+                            seriesIndex: series.index
+                        }
+                    );
+                    series.seriesPoint = seriesPoint;
+
+                    seriesLayout.addSeries(series);
+                    seriesLayout.addNodes([seriesPoint]);
+                    seriesLayout.addLinks([]);
+                }
+            }
         },
         /**
          * Extend the base translate method to handle bubble size,
@@ -861,7 +1038,6 @@ seriesType('packedbubble', 'bubble',
                 maxSize,
                 value,
                 radius;
-
             ['minSize', 'maxSize'].forEach(function (prop) {
                 var length = parseInt(seriesOptions[prop], 10),
                     isPercent = /%$/.test(length);
@@ -895,6 +1071,114 @@ seriesType('packedbubble', 'bubble',
 
             this.radii = radii;
         },
+        setVisible: function () {
+            if (this.seriesLayout) {
+                this.seriesLayout.nodes.forEach(function (n) {
+                    if (n.gr) {
+                        n.gr.destroy();
+                    }
+                });
+                this.seriesLayout.clearNodes();
+            }
+            this.layout.clearNodes();
+            H.Series.prototype.setVisible.apply(this, arguments);
+        },
+        redrawHalo: function (point) {
+            if (point && this.halo) {
+                this.halo.attr({
+                    d: point.haloPath(
+                        this.options.states.hover.halo.size
+                    )
+                });
+            }
+        },
+        onMouseDown: function (point, event) {
+            var normalizedEvent = this.chart.pointer.normalize(event);
+
+            point.fixedPosition = {
+                chartX: normalizedEvent.chartX,
+                chartY: normalizedEvent.chartY,
+                plotX: point.plotX,
+                plotY: point.plotY
+            };
+
+            point.inDragMode = true;
+        },
+        onMouseMove: function (point, event) {
+            if (point.fixedPosition && point.inDragMode) {
+                var series = this,
+                    chart = series.chart,
+                    normalizedEvent = chart.pointer.normalize(event),
+                    diffX = point.fixedPosition.chartX - normalizedEvent.chartX,
+                    diffY = point.fixedPosition.chartY - normalizedEvent.chartY,
+                    newPlotX,
+                    newPlotY;
+
+                // At least 5px to apply change (avoids simple click):
+                if (Math.abs(diffX) > 5 || Math.abs(diffY) > 5) {
+                    newPlotX = point.fixedPosition.plotX - diffX;
+                    newPlotY = point.fixedPosition.plotY - diffY;
+
+                    if (chart.isInsidePlot(newPlotX, newPlotY)) {
+                        point.plotX = newPlotX;
+                        point.plotY = newPlotY;
+
+                        series.redrawHalo();
+
+                        if (!series.layout.simulation) {
+                            // Start new simulation:
+                            if (!series.layout.enableSimulation) {
+                                // Run only one iteration to speed things up:
+                                series.layout.setMaxIterations(1);
+                            }
+                            // When dragging nodes, we don't need to calculate
+                            // initial positions and rendering nodes:
+                            series.layout.setInitialRendering(false);
+                            series.layout.run();
+                            // Restore defaults:
+                            series.layout.setInitialRendering(true);
+                        } else {
+                            // Extend current simulation:
+                            series.layout.resetSimulation();
+                        }
+                    }
+                }
+            }
+        },
+        onMouseUp: function (point) {
+            if (point.fixedPosition && !point.removed) {
+                var distanceXY,
+                    distanceR,
+                    layout = this.layout,
+                    seriesLayout = this.seriesLayout;
+
+                seriesLayout.nodes.forEach(function (node) {
+                    if (point && point.marker) {
+                        distanceXY = layout.getDistXY(point, node);
+                        distanceR = (
+                            layout.vectorLength(distanceXY) -
+                            node.marker.radius -
+                            point.marker.radius
+                        );
+                        if (distanceR < 0) {
+                            node.series.addPoint({
+                                x: point.x,
+                                value: point.value,
+                                plotX: point.plotX,
+                                plotY: point.plotY
+                            }, false);
+                            layout.nodes.splice(layout.nodes.indexOf(point), 1);
+                            point.series.removePoint(point.index);
+                        }
+                    }
+                });
+                layout.run();
+                point.inDragMode = false;
+                if (!this.options.fixedDraggable) {
+                    delete point.fixedPosition;
+                }
+            }
+        },
 
         alignDataLabel: H.Series.prototype.alignDataLabel
     }, {
@@ -911,6 +1195,86 @@ H.addEvent(H.Chart, 'beforeRedraw', function () {
         delete this.allDataPoints;
     }
 });
+
+
+/*
+ * Multiple series support:
+ */
+// Clear previous layouts
+addEvent(Chart, 'predraw', function () {
+    if (this.graphLayoutsLookup) {
+        this.graphLayoutsLookup.forEach(
+            function (layout) {
+                layout.stop();
+            }
+        );
+    }
+});
+addEvent(Chart, 'render', function () {
+    if (this.graphLayoutsLookup) {
+        H.setAnimation(false, this);
+        this.graphLayoutsLookup.forEach(
+            function (layout) {
+                layout.run();
+            }
+        );
+    }
+});
+
+/*
+ * Draggable mode:
+ */
+addEvent(
+    Chart,
+    'load',
+    function () {
+        var chart = this,
+            unbinders = [];
+
+        if (chart.container) {
+            unbinders.push(
+                addEvent(
+                    chart.container,
+                    'mousedown',
+                    function (event) {
+                        var point = chart.hoverPoint;
+                        if (
+                            point &&
+                            point.series &&
+                            point.series.options.isPackedBbl &&
+                            point.series.options.draggable
+                        ) {
+                            point.series.onMouseDown(point, event);
+                            unbinders.push(addEvent(
+                                chart.container,
+                                'mousemove',
+                                function (e) {
+                                    return point.series.onMouseMove(point, e);
+                                }
+                            ));
+                            unbinders.push(addEvent(
+                                chart.container.ownerDocument,
+                                'mouseup',
+                                function (e) {
+                                    unbinders[1]();
+                                    unbinders[2]();
+                                    unbinders = unbinders.slice(0, 1);
+                                    return point.series.onMouseUp(point, e);
+                                }
+                            ));
+                        }
+                    }
+                )
+            );
+        }
+
+        addEvent(chart, 'destroy', function () {
+            unbinders.forEach(function (unbind) {
+                unbind();
+            });
+        });
+    }
+);
 
 /**
  * A `packedbubble` series. If the [type](#series.packedbubble.type) option is

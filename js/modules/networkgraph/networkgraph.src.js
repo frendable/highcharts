@@ -609,31 +609,6 @@ seriesType('networkgraph', 'line', {
     }
 });
 
-/*
- * Multiple series support:
- */
-// Clear previous layouts
-addEvent(Chart, 'predraw', function () {
-    if (this.graphLayoutsStorage) {
-        H.objectEach(
-            this.graphLayoutsStorage,
-            function (layout) {
-                layout.stop();
-            }
-        );
-    }
-});
-addEvent(Chart, 'render', function () {
-    if (this.graphLayoutsStorage) {
-        H.setAnimation(false, this);
-        H.objectEach(
-            this.graphLayoutsStorage,
-            function (layout) {
-                layout.run();
-            }
-        );
-    }
-});
 
 /*
  * Draggable mode:
@@ -652,7 +627,6 @@ addEvent(
                     'mousedown',
                     function (event) {
                         var point = chart.hoverPoint;
-
                         if (
                             point &&
                             point.series &&

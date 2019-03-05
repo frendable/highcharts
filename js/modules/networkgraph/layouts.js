@@ -27,7 +27,7 @@ H.layouts = {
             width: 0,
             height: 0
         };
-
+        this.index = options.index || 0;
         this.setInitialRendering(true);
 
         this.integration = H.networkgraphIntegrations[options.integration];
