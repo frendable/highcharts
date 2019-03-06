@@ -19,7 +19,8 @@ var seriesType = H.seriesType,
     defined = H.defined,
     pick = H.pick,
     addEvent = H.addEvent,
-    Chart = H.Chart;
+    Chart = H.Chart,
+    color = H.Color;
 
 
 H.networkgraphIntegrations.packedbubble = {
@@ -29,39 +30,40 @@ H.networkgraphIntegrations.packedbubble = {
         return Math.min(d, node.marker.radius + 5);
     },
     barycenter: function () {
-        var gravitationalConstant = this.options.gravitationalConstant,
-            // Add in next implementation
-            // xFactor = this.barycenter.xFactor,
-            // yFactor = this.barycenter.yFactor,
-            box = this.box,
-            nodes = this.nodes,
-            chart = this.nodes[0].series.chart,
+        var layout = this,
+            gravitationalConstant = layout.options.gravitationalConstant,
+            box = layout.box,
+            nodes = layout.nodes,
+            chart,
             seriesPoint;
-
         nodes.forEach(function (node) {
             seriesPoint = {
                 plotX: box.width / 2,
                 plotY: box.height / 2
             };
-
-            if (!node.ghostPoint) {
-                seriesPoint = node.series.seriesPoint;
-            } else {
-                if (!node.series.seriesPoint.gr) {
-                    node.series.seriesPoint.gr = chart.renderer.circle(
-                        node.series.seriesPoint.plotX + chart.plotLeft,
-                        node.series.seriesPoint.plotY + chart.plotTop,
-                        node.series.seriesPoint.mass
-                    ).attr({
-                        fill: 'rgba(250,250,250,0.5)',
-                        stroke: 'blue',
-                        'stroke-width': 1
-                    }).add();
+            if (!layout.options.mixSeries) {
+                if (!node.parentNode) {
+                    seriesPoint = node.series.seriesPoint;
                 } else {
-                    node.series.seriesPoint.gr.attr({
-                        x: node.series.seriesPoint.plotX + chart.plotLeft,
-                        y: node.series.seriesPoint.plotY + chart.plotTop
-                    });
+                    chart = node.series.chart;
+                    if (!node.series.seriesPoint.gr) {
+                        node.series.seriesPoint.gr = chart.renderer.circle(
+                            node.series.seriesPoint.plotX + chart.plotLeft,
+                            node.series.seriesPoint.plotY + chart.plotTop,
+                            node.series.seriesPoint.marker.radius
+                        ).attr({
+                            fill: color(
+                                node.series.color
+                            ).brighten(0.4).get(),
+                            stroke: color(node.series.color).get(),
+                            'stroke-width': 1
+                        }).add();
+                    } else {
+                        node.series.seriesPoint.gr.attr({
+                            x: node.series.seriesPoint.plotX + chart.plotLeft,
+                            y: node.series.seriesPoint.plotY + chart.plotTop
+                        });
+                    }
                 }
             }
             if (!node.fixedPosition) {
@@ -88,81 +90,46 @@ H.networkgraphIntegrations.packedbubble = {
         }
     },
     integrate: function (layout, node) {
-        var prevX = node.prevX,
+        var friction = -layout.options.friction,
+            maxSpeed = layout.options.maxSpeed,
+            prevX = node.prevX,
             prevY = node.prevY,
-            diffX = (node.plotX + node.dispX - prevX),
-            diffY = (node.plotY + node.dispY - prevY);
+            // Apply friciton:
+            diffX = (node.plotX + node.dispX - prevX) * friction,
+            diffY = (node.plotY + node.dispY - prevY) * friction;
+
+        // Apply max speed:
+        diffX = Math.sign(diffX) * Math.min(maxSpeed, Math.abs(diffX));
+        diffY = Math.sign(diffY) * Math.min(maxSpeed, Math.abs(diffY));
+
         // Store for the next iteration:
         node.prevX = node.plotX + node.dispX;
         node.prevY = node.plotY + node.dispY;
-        // Update positions, apply friction:
-        node.plotX += diffX * -layout.options.friction;
-        // /node.collisionNmb/node.neighbours;
-        node.plotY += diffY * -layout.options.friction;
-        // /node.collisionNmb/node.neighbours;
+
+        // Update positions:
+        node.plotX += diffX;
+        node.plotY += diffY;
 
         node.temperature = layout.vectorLength({
-            x: diffX * -layout.options.friction,
-            y: diffY * -layout.options.friction
+            x: diffX,
+            y: diffY
         });
     },
-    getK: function (layout) {
-        return Math.pow(
-            layout.box.width * layout.box.height / layout.nodes.length,
-            0.5
-        );
-    }
+    getK: H.noop
 };
 
 H.extend(
     H.layouts['reingold-fruchterman'].prototype,
     {
-        getBarycenter: function () {
-            var systemMass = 0,
-                cx = 0,
-                cy = 0,
-                nodes = this.nodes;
-
-            nodes.forEach(function (node) {
-                cx += node.plotX * node.mass;
-                cy += node.plotY * node.mass;
-
-                systemMass += node.mass;
-            });
-
-            this.barycenter = {
-                x: cx,
-                y: cy,
-                xFactor: cx / systemMass,
-                yFactor: cy / systemMass
-            };
-            /*
-            if (!this.options.mixSeries) {
-                this.series.forEach(function (s) {
-                    s.systemMass = 0;
-                    s.cx = 0;
-                    s.cy = 0;
-                    nodes.forEach(function(node) {
-                        if(node.series.index === s.index) {
-                            s.cx += node.plotX * node.mass;
-                            s.cy += node.plotY * node.mass;
-                            s.systemMass += node.mass;
-                        }
-                    });
-
-                    s.seriesBaryCent = {
-                        x: s.cx,
-                        y: s.cy,
-                        xFactor: s.cx / s.systemMass,
-                        yFactor: s.cy / s.systemMass
-                    };
-                });
-            }
-            */
-            return this.barycenter;
-        },
-
         clearNodes: function () {
+            var seriesPoint;
+            this.nodes.forEach(function (node) {
+                seriesPoint = node.series && node.series.seriesPoint;
+                if (seriesPoint && seriesPoint.gr) {
+                    node.series.seriesPoint.gr.destroy();
+                    delete node.series.seriesPoint.gr;
+                }
+            });
             this.nodes.length = 0;
         },
         addNodes: function (nodes) {
@@ -178,37 +145,32 @@ H.extend(
                 nodes = layout.nodes,
                 nodesLength = nodes.length + 1,
                 angle = 2 * Math.PI / nodesLength,
-                seriesPoint;
-
+                seriesPoint,
+                radius = 100;
             nodes.forEach(function (node, index) {
                 seriesPoint = {
                     plotX: box.width / 2,
                     plotY: box.height / 2
                 };
                 if (
-                    !node.ghostPoint &&
+                    !node.parentNode &&
                     node.series &&
                     node.series.seriesPoint &&
                     node.series.seriesPoint.plotX
                 ) {
                     seriesPoint = node.series.seriesPoint;
                 }
-                node.plotX = node.prevX = node.ghostPoint ?
+                node.plotX = node.prevX = pick(
+                    node.plotX,
                     seriesPoint.plotX +
-                    50 * Math.cos(node.index || index * angle) :
-                    pick(
-                        node.plotX,
-                        seriesPoint.plotX +
-                        50 * Math.cos(node.index || index * angle)
-                    );
+                    radius * Math.cos(node.index || index * angle)
+                );
 
-                node.plotY = node.prevY = node.ghostPoint ?
-                    seriesPoint.plotY +
-                    50 * Math.cos(node.index || index * angle) :
+                node.plotY = node.prevY =
                     pick(
                         node.plotY,
                         seriesPoint.plotY +
-                        50 * Math.sin(node.index || index * angle)
+                        radius * Math.sin(node.index || index * angle)
                     );
 
                 node.dispX = 0;
@@ -238,6 +200,7 @@ H.extend(
                         distanceXY = layout.getDistXY(node, repNode);
                         distanceR = (layout.vectorLength(distanceXY) -
                             (node.marker.radius + repNode.marker.radius + 5));
+                        // TODO padding configurable
                         if (distanceR < 0) {
                             node.degree += 0.01;
                             node.neighbours++;
@@ -508,7 +471,8 @@ seriesType('packedbubble', 'bubble',
              * finding perfect graph positions can require more time.
              */
             maxIterations: 1000,
-            mixSeries: true,
+            mixSeries: false,
+            maxSpeed: 5,
             /**
              * Gravitational const used in the barycenter
              * force of the algorithm.
@@ -637,7 +601,7 @@ seriesType('packedbubble', 'bubble',
             layout.addLinks([]);
             series.points = points;
 
-            if (!series.options.mixSeries) {
+            if (!layoutOptions.mixSeries) {
                 seriesLayout = graphLayoutsStorage[
                     layoutOptions.type + '-series'
                 ];
@@ -648,8 +612,9 @@ seriesType('packedbubble', 'bubble',
                                 H.merge(
                                     layoutOptions,
                                     {
-                                        enableSimulation: false,
-                                        maxIterations: 1400
+                                        enableSimulation: true,
+                                        maxIterations: 1400,
+                                        maxSpeed: 10
                                     }
                                 )
                             );
@@ -657,7 +622,6 @@ seriesType('packedbubble', 'bubble',
                         seriesLayout.index, 0, seriesLayout
                     );
                 }
-
                 series.seriesLayout = seriesLayout;
 
                 series.systemMass = 0;
@@ -686,10 +650,14 @@ seriesType('packedbubble', 'bubble',
                                 radius: series.seriesRadius
                             },
                             degree: series.seriesRadius,
-                            ghostPoint: true,
+                            parentNode: true,
                             seriesIndex: series.index
                         }
                     );
+                    if (series.seriesPoint) {
+                        seriesPoint.plotX = series.seriesPoint.plotX;
+                        seriesPoint.plotY = series.seriesPoint.plotY;
+                    }
                     series.seriesPoint = seriesPoint;
 
                     seriesLayout.addSeries(series);
@@ -710,10 +678,13 @@ seriesType('packedbubble', 'bubble',
                 index = series.index,
                 point,
                 radius,
-                i;
+                positions,
+                i,
+                useSimulation = true;
 
             this.processedXData = this.xData;
             this.generatePoints();
+
 
             // merged data is an array with all of the data from all series
             if (!defined(chart.allDataPoints)) {
@@ -722,24 +693,51 @@ seriesType('packedbubble', 'bubble',
                 series.getPointRadius();
             }
 
-            // Set the shape type and arguments to be picked up in drawPoints
-            for (i = 0; i < chart.allDataPoints.length; i++) {
+            // after getting initial radius, calculate bubble positions
+            positions = this.placeBubbles(chart.allDataPoints);
 
-                if (chart.allDataPoints[i][3] === index) {
 
-                    // update the series points with the values from positions
-                    // array
-                    point = data[chart.allDataPoints[i][4]];
-                    radius = chart.allDataPoints[i][2];
-                    point.marker = H.extend(point.marker, {
-                        radius: radius,
-                        width: 2 * radius,
-                        height: 2 * radius
-                    });
+            if (!useSimulation) {
+                // Set the shape and arguments to be picked up in drawPoints
+                for (i = 0; i < positions.length; i++) {
+
+                    if (positions[i][3] === index) {
+
+                        // update the series points with the val from positions
+                        // array
+                        point = data[positions[i][4]];
+                        radius = positions[i][2];
+                        point.plotX = positions[i][0] - chart.plotLeft +
+                          chart.diffX;
+                        point.plotY = positions[i][1] - chart.plotTop +
+                          chart.diffY;
+
+                        point.marker = H.extend(point.marker, {
+                            radius: radius,
+                            width: 2 * radius,
+                            height: 2 * radius
+                        });
+                    }
                 }
-            }
+            } else {
+                // Set the shape and arguments to be picked up in drawPoints
+                for (i = 0; i < chart.allDataPoints.length; i++) {
 
-            this.deferLayout();
+                    if (chart.allDataPoints[i][3] === index) {
+
+                        // update the series points with the val from positions
+                        // array
+                        point = data[chart.allDataPoints[i][4]];
+                        radius = chart.allDataPoints[i][2];
+                        point.marker = H.extend(point.marker, {
+                            radius: radius,
+                            width: 2 * radius,
+                            height: 2 * radius
+                        });
+                    }
+                }
+                this.deferLayout();
+            }
         },
         /**
          * Check if two bubbles overlaps.
@@ -1046,7 +1044,6 @@ seriesType('packedbubble', 'bubble',
                     smallestSize * length / 100 :
                     length;
             });
-
             chart.minRadius = minSize = extremes.minSize /
                 Math.sqrt(allDataPoints.length);
             chart.maxRadius = maxSize = extremes.maxSize /
@@ -1070,18 +1067,6 @@ seriesType('packedbubble', 'bubble',
             });
 
             this.radii = radii;
-        },
-        setVisible: function () {
-            if (this.seriesLayout) {
-                this.seriesLayout.nodes.forEach(function (n) {
-                    if (n.gr) {
-                        n.gr.destroy();
-                    }
-                });
-                this.seriesLayout.clearNodes();
-            }
-            this.layout.clearNodes();
-            H.Series.prototype.setVisible.apply(this, arguments);
         },
         redrawHalo: function (point) {
             if (point && this.halo) {
@@ -1205,6 +1190,7 @@ addEvent(Chart, 'predraw', function () {
     if (this.graphLayoutsLookup) {
         this.graphLayoutsLookup.forEach(
             function (layout) {
+                layout.clearNodes();
                 layout.stop();
             }
         );
@@ -1245,7 +1231,7 @@ addEvent(
                             point.series.options.draggable
                         ) {
                             point.series.onMouseDown(point, event);
-                            unbinders.push(addEvent(
+                            unbinders.push(addEvent( // add names for unbinders
                                 chart.container,
                                 'mousemove',
                                 function (e) {
