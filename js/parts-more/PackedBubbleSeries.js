@@ -323,7 +323,7 @@ seriesType('packedbubble', 'bubble',
          * @product highcharts highstock
          */
         maxSize: '50%',
-        sizeBy: 'radius',
+        sizeBy: 'area',
         zoneAxis: 'y',
         tooltip: {
             pointFormat: 'Value: {point.value}'
@@ -560,7 +560,6 @@ seriesType('packedbubble', 'bubble',
                 seriesLayout,
                 NetworkPoint = H.seriesTypes.networkgraph.prototype.pointClass;
 
-
             series.nodes = points;
             series.nodes.forEach(function (node) {
                 node.mass = Math.max(node.marker.radius / 10, 1);
@@ -613,8 +612,8 @@ seriesType('packedbubble', 'bubble',
                                     layoutOptions,
                                     {
                                         enableSimulation: true,
-                                        maxIterations: 1400,
-                                        maxSpeed: 10
+                                        maxIterations: 400,
+                                        maxSpeed: 50
                                     }
                                 )
                             );
@@ -684,7 +683,6 @@ seriesType('packedbubble', 'bubble',
 
             this.processedXData = this.xData;
             this.generatePoints();
-
 
             // merged data is an array with all of the data from all series
             if (!defined(chart.allDataPoints)) {
@@ -810,7 +808,6 @@ seriesType('packedbubble', 'bubble',
                 posX = newOrigin[0] + (newOrigin[2] + nextBubble[2]) * sinA,
                 // center of new origin + (radius1 + radius2) * sinus A
                 posY = newOrigin[1] - (newOrigin[2] + nextBubble[2]) * cosA;
-
             return [
                 posX,
                 posY,
@@ -850,7 +847,7 @@ seriesType('packedbubble', 'bubble',
                 return b[2] - a[2];
             });
 
-            if (sortedArr.length < 2) {
+            if (sortedArr.length === 1) {
                 // if length is 1,return only one bubble
                 arr = [
                     0, 0,
@@ -858,7 +855,7 @@ seriesType('packedbubble', 'bubble',
                     sortedArr[0][1],
                     sortedArr[0][2]
                 ];
-            } else {
+            } else if (sortedArr.length) {
 
                 // create first bubble in the middle of the chart
                 bubblePos.push([
@@ -886,7 +883,6 @@ seriesType('packedbubble', 'bubble',
                 for (i = 2; i < sortedArr.length; i++) {
                     sortedArr[i][2] = sortedArr[i][2] || 1;
                     // in case if radius is calculated as 0.
-
                     calculatedBubble = positionBubble(
                         bubblePos[stage][j],
                         bubblePos[stage - 1][k],
@@ -947,8 +943,10 @@ seriesType('packedbubble', 'bubble',
 
                 series.chart.rawPositions = [].concat.apply([], bubblePos);
                 // bubble positions merged into one array
-                arr = series.chart.rawPositions;
+
                 series.resizeRadius();
+                arr = series.chart.rawPositions;
+
             }
             return arr;
         },
@@ -1018,6 +1016,18 @@ seriesType('packedbubble', 'bubble',
             }
         },
 
+        calculateZExtremes: function () {
+            var series = this,
+                chart = series.chart,
+                zMin = series.yData[0],
+                zMax = series.yData[0];
+
+            chart.series.forEach(function (s) {
+                zMax = Math.max(zMax, Math.max.apply(this, s.yData));
+                zMin = Math.min(zMin, Math.min.apply(this, s.yData));
+            });
+            return [zMin, zMax];
+        },
         /**
          * Calculate radius of bubbles in series.
          */
@@ -1035,37 +1045,35 @@ seriesType('packedbubble', 'bubble',
                 minSize,
                 maxSize,
                 value,
-                radius;
+                radius, zExtremes;
             ['minSize', 'maxSize'].forEach(function (prop) {
                 var length = parseInt(seriesOptions[prop], 10),
-                    isPercent = /%$/.test(length);
-
+                    isPercent = /%$/.test(seriesOptions[prop]);
                 extremes[prop] = isPercent ?
                     smallestSize * length / 100 :
-                    length;
+                    length * Math.sqrt(allDataPoints.length);
             });
             chart.minRadius = minSize = extremes.minSize /
                 Math.sqrt(allDataPoints.length);
             chart.maxRadius = maxSize = extremes.maxSize /
                 Math.sqrt(allDataPoints.length);
+            zExtremes = this.calculateZExtremes();
 
             (allDataPoints || []).forEach(function (point, i) {
                 value = point[2];
-
                 radius = series.getRadius(
-                    minSize,
-                    maxSize,
+                    zExtremes[0],
+                    zExtremes[1],
                     minSize,
                     maxSize,
                     value
                 );
-                if (value === 0) {
+                if (radius === 0) {
                     radius = null;
                 }
                 allDataPoints[i][2] = radius;
                 radii.push(radius);
             });
-
             this.radii = radii;
         },
         redrawHalo: function (point) {
